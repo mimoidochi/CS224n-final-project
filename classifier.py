@@ -49,6 +49,7 @@ class BertSentimentClassifier(torch.nn.Module):
 
         # Create any instance variables you need to classify the sentiment of BERT embeddings.
         ### TODO
+        self.hidden_dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classes = nn.Linear(config.hidden_size, config.num_labels)
 
 
@@ -58,8 +59,9 @@ class BertSentimentClassifier(torch.nn.Module):
         # HINT: You should consider what is an appropriate return value given that
         # the training loop currently uses F.cross_entropy as the loss function.
         ### TODO
-        bert_output = self.bert(input_ids, attention_mask)
-        logits = F.softmax(self.classes(bert_output['pooler_output']), dim=1)
+        logits = self.bert(input_ids, attention_mask)['pooler_output']
+        logits = self.hidden_dropout(logits)
+        logits = F.softmax(self.classes(logits), dim=1)
         return logits
 
 
@@ -142,13 +144,13 @@ def load_data(filename, flag='train'):
     num_labels = {}
     data = []
     if flag == 'test':
-        with open(filename, 'r') as fp:
+        with open(filename, 'r', encoding='utf8') as fp:
             for record in csv.DictReader(fp,delimiter = '\t'):
                 sent = record['sentence'].lower().strip()
                 sent_id = record['id'].lower().strip()
                 data.append((sent,sent_id))
     else:
-        with open(filename, 'r') as fp:
+        with open(filename, 'r', encoding='utf8') as fp:
             for record in csv.DictReader(fp,delimiter = '\t'):
                 sent = record['sentence'].lower().strip()
                 sent_id = record['id'].lower().strip()
