@@ -77,6 +77,9 @@ class MultitaskBERT(nn.Module):
         self.paraphrase_layer = nn.Linear(2 * config.hidden_size, 1)
         self.similarity_layer = nn.Linear(2 * config.hidden_size, 1)
 
+        self.bert_cache = {}
+        self.pretrain = config.option == 'pretrain'
+
 
     def forward(self, input_ids, attention_mask):
         'Takes a batch of sentences and produces embeddings for them.'
@@ -85,43 +88,74 @@ class MultitaskBERT(nn.Module):
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         ### TODO
-        return self.bert(input_ids, attention_mask)
+        return self.bert(input_ids, attention_mask)['pooler_output']
 
-    def predict_sentiment(self, input_ids, attention_mask):
+    def predict_sentiment(self, input_ids, attention_mask, sent_ids):
         '''Given a batch of sentences, outputs logits for classifying sentiment.
         There are 5 sentiment classes:
         (0 - negative, 1- somewhat negative, 2- neutral, 3- somewhat positive, 4- positive)
         Thus, your output should contain 5 logits for each sentence.
         '''
         ### TODO
-        logits = self.forward(input_ids, attention_mask)['pooler_output']
+        logits = None
+        if self.pretrain:
+            bert_encodings = []
+            for i in range(len(sent_ids)):
+                if sent_ids[i] not in self.bert_cache:
+                    self.bert_cache[sent_ids[i]] = self.forward(input_ids[i].unsqueeze(0), attention_mask[i].unsqueeze(0))
+                bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
+            logits = torch.stack(bert_encodings)
+        else:
+            logits = self.forward(input_ids, attention_mask)
         logits = F.softmax(self.sentiment_layer(logits), dim=1)
         return logits
 
     def predict_paraphrase(self,
                            input_ids_1, attention_mask_1,
-                           input_ids_2, attention_mask_2):
+                           input_ids_2, attention_mask_2, sent_ids):
         '''Given a batch of pairs of sentences, outputs a single logit for predicting whether they are paraphrases.
         Note that your output should be unnormalized (a logit); it will be passed to the sigmoid function
         during evaluation.
         '''
         ### TODO
-        sent_embedding_1 = self.forward(input_ids_1, attention_mask_1)['pooler_output']
-        sent_embedding_2 = self.forward(input_ids_2, attention_mask_2)['pooler_output']
-        concat_embedding = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
+        concat_embedding = None
+        if self.pretrain:
+            bert_encodings = []
+            for i in range(len(sent_ids)):
+                if sent_ids[i] not in self.bert_cache:
+                    sent_embedding_1 = self.forward(input_ids_1[i].unsqueeze(0), attention_mask_1[i].unsqueeze(0))
+                    sent_embedding_2 = self.forward(input_ids_2[i].unsqueeze(0), attention_mask_2[i].unsqueeze(0))
+                    self.bert_cache[sent_ids[i]] = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
+                bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
+            concat_embedding = torch.stack(bert_encodings)
+        else:
+            sent_embedding_1 = self.forward(input_ids_1, attention_mask_1)
+            sent_embedding_2 = self.forward(input_ids_2, attention_mask_2)
+            concat_embedding = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
         logits = self.paraphrase_layer(concat_embedding)
         return logits
 
     def predict_similarity(self,
                            input_ids_1, attention_mask_1,
-                           input_ids_2, attention_mask_2):
+                           input_ids_2, attention_mask_2, sent_ids):
         '''Given a batch of pairs of sentences, outputs a single logit corresponding to how similar they are.
         Note that your output should be unnormalized (a logit).
         '''
         ### TODO
-        sent_embedding_1 = self.forward(input_ids_1, attention_mask_1)['pooler_output']
-        sent_embedding_2 = self.forward(input_ids_2, attention_mask_2)['pooler_output']
-        concat_embedding = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
+        concat_embedding = None
+        if self.pretrain:
+            bert_encodings = []
+            for i in range(len(sent_ids)):
+                if sent_ids[i] not in self.bert_cache:
+                    sent_embedding_1 = self.forward(input_ids_1[i].unsqueeze(0), attention_mask_1[i].unsqueeze(0))
+                    sent_embedding_2 = self.forward(input_ids_2[i].unsqueeze(0), attention_mask_2[i].unsqueeze(0))
+                    self.bert_cache[sent_ids[i]] = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
+                bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
+            concat_embedding = torch.stack(bert_encodings)
+        else:
+            sent_embedding_1 = self.forward(input_ids_1, attention_mask_1)
+            sent_embedding_2 = self.forward(input_ids_2, attention_mask_2)
+            concat_embedding = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
         logits = self.similarity_layer(concat_embedding)
         return logits
 
@@ -230,15 +264,15 @@ def train_sentiment(model, epoch, batch_size, optimizer, device, sst_train_datal
     train_loss = 0
     num_batches = 0
     for batch in tqdm(sst_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-        b_ids, b_mask, b_labels = (batch['token_ids'],
-                                    batch['attention_mask'], batch['labels'])
+        b_ids, b_mask, b_labels, b_sent_ids = (batch['token_ids'],
+                                    batch['attention_mask'], batch['labels'], batch['sent_ids'])
 
         b_ids = b_ids.to(device)
         b_mask = b_mask.to(device)
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_sentiment(b_ids, b_mask)
+        logits = model.predict_sentiment(b_ids, b_mask, b_sent_ids)
         loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / batch_size
 
         loss.backward()
@@ -255,9 +289,9 @@ def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dat
     train_loss = 0
     num_batches = 0
     for batch in tqdm(para_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-        b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_labels = (batch['token_ids_1'],
+        b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_labels, b_sent_ids = (batch['token_ids_1'],
                                                           batch['attention_mask_1'], batch['token_ids_2'],
-                                                          batch['attention_mask_2'], batch['labels'])
+                                                          batch['attention_mask_2'], batch['labels'], batch['sent_ids'])
         b_ids_1 = b_ids_1.to(device)
         b_mask_1 = b_mask_1.to(device)
         b_ids_2 = b_ids_2.to(device)
@@ -265,7 +299,7 @@ def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dat
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_paraphrase(b_ids_1, b_mask_1, b_ids_2, b_mask_2).sigmoid().flatten()
+        logits = model.predict_paraphrase(b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_sent_ids).sigmoid().flatten()
         loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
 
         loss.backward()
@@ -282,9 +316,9 @@ def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_data
     train_loss = 0
     num_batches = 0
     for batch in tqdm(sts_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-        b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_labels = (batch['token_ids_1'],
+        b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_labels, b_sent_ids = (batch['token_ids_1'],
                                                           batch['attention_mask_1'], batch['token_ids_2'],
-                                                          batch['attention_mask_2'], batch['labels'])
+                                                          batch['attention_mask_2'], batch['labels'], batch['sent_ids'])
         b_ids_1 = b_ids_1.to(device)
         b_mask_1 = b_mask_1.to(device)
         b_ids_2 = b_ids_2.to(device)
@@ -292,7 +326,7 @@ def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_data
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_similarity(b_ids_1, b_mask_1, b_ids_2, b_mask_2).flatten()
+        logits = model.predict_similarity(b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_sent_ids).flatten()
         loss = F.mse_loss(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
 
         loss.backward()
