@@ -72,7 +72,10 @@ class MultitaskBERT(nn.Module):
                 param.requires_grad = True
         # You will want to add layers here to perform the downstream tasks.
         ### TODO
-        raise NotImplementedError
+        self.hidden_dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.sentiment_layer = nn.Linear(config.hidden_size, config.num_labels)
+        self.paraphrase_layer = nn.Linear(2 * config.hidden_size, 1)
+        self.similarity_layer = nn.Linear(2 * config.hidden_size, 1)
 
 
     def forward(self, input_ids, attention_mask):
@@ -82,8 +85,7 @@ class MultitaskBERT(nn.Module):
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         ### TODO
-        raise NotImplementedError
-
+        return self.bert(input_ids, attention_mask)
 
     def predict_sentiment(self, input_ids, attention_mask):
         '''Given a batch of sentences, outputs logits for classifying sentiment.
@@ -92,8 +94,9 @@ class MultitaskBERT(nn.Module):
         Thus, your output should contain 5 logits for each sentence.
         '''
         ### TODO
-        raise NotImplementedError
-
+        logits = self.forward(input_ids, attention_mask)['pooler_output']
+        logits = F.softmax(self.sentiment_layer(logits), dim=1)
+        return logits
 
     def predict_paraphrase(self,
                            input_ids_1, attention_mask_1,
@@ -103,8 +106,11 @@ class MultitaskBERT(nn.Module):
         during evaluation.
         '''
         ### TODO
-        raise NotImplementedError
-
+        sent_embedding_1 = self.forward(input_ids_1, attention_mask_1)['pooler_output']
+        sent_embedding_2 = self.forward(input_ids_2, attention_mask_2)['pooler_output']
+        concat_embedding = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
+        logits = self.paraphrase_layer(concat_embedding)
+        return logits
 
     def predict_similarity(self,
                            input_ids_1, attention_mask_1,
@@ -113,9 +119,11 @@ class MultitaskBERT(nn.Module):
         Note that your output should be unnormalized (a logit).
         '''
         ### TODO
-        raise NotImplementedError
-
-
+        sent_embedding_1 = self.forward(input_ids_1, attention_mask_1)['pooler_output']
+        sent_embedding_2 = self.forward(input_ids_2, attention_mask_2)['pooler_output']
+        concat_embedding = torch.cat((sent_embedding_1, sent_embedding_2), dim=1)
+        logits = self.similarity_layer(concat_embedding)
+        return logits
 
 
 def save_model(model, optimizer, args, config, filepath):
@@ -154,9 +162,22 @@ def train_multitask(args):
     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sst_dev_data.collate_fn)
 
+    para_train_data = SentencePairDataset(para_train_data, args)
+    para_dev_data = SentencePairDataset(para_dev_data, args)
+    para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
+                                      collate_fn=para_train_data.collate_fn)
+    para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=para_dev_data.collate_fn)
+
+    sts_train_data = SentencePairDataset(sts_train_data, args, isRegression=True)
+    sts_dev_data = SentencePairDataset(sts_dev_data, args, isRegression=True)
+    sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
+                                       collate_fn=sts_train_data.collate_fn)
+    sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
+                                     collate_fn=sts_dev_data.collate_fn)
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
-              'num_labels': num_labels,
+              'num_labels': len(num_labels),
               'hidden_size': 768,
               'data_dir': '.',
               'option': args.option}
@@ -166,43 +187,121 @@ def train_multitask(args):
     model = MultitaskBERT(config)
     model = model.to(device)
 
-    lr = args.lr
-    optimizer = AdamW(model.parameters(), lr=lr)
-    best_dev_acc = 0
-
+    optimizer = AdamW(model.parameters(), lr=args.lr)
     # Run for the specified number of epochs.
+    best_dev_score = 0
     for epoch in range(args.epochs):
         model.train()
-        train_loss = 0
-        num_batches = 0
-        for batch in tqdm(sst_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-            b_ids, b_mask, b_labels = (batch['token_ids'],
-                                       batch['attention_mask'], batch['labels'])
 
-            b_ids = b_ids.to(device)
-            b_mask = b_mask.to(device)
-            b_labels = b_labels.to(device)
+        sst_loss = train_sentiment(model, epoch, args.batch_size, optimizer, device, sst_train_dataloader)
+        para_loss = train_paraphrase(model, epoch, args.batch_size, optimizer, device, para_train_dataloader)
+        sts_loss = train_similarity(model, epoch, args.batch_size, optimizer, device, sts_train_dataloader)
 
-            optimizer.zero_grad()
-            logits = model.predict_sentiment(b_ids, b_mask)
-            loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
-
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item()
-            num_batches += 1
-
-        train_loss = train_loss / (num_batches)
-
-        train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
-
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
+        sst_train_acc, _, _, para_train_acc, _, _, sts_train_corr, *_ = model_eval_multitask(sst_train_dataloader,
+                                                                                             para_train_dataloader,
+                                                                                             sts_train_dataloader,
+                                                                                             model, device)
+        sst_dev_acc, _, _, para_dev_acc, _, _, sts_dev_corr, *_ = model_eval_multitask(sst_dev_dataloader,
+                                                                                       para_dev_dataloader,
+                                                                                       sts_dev_dataloader,
+                                                                                       model, device)
+        train_mean_score = (sst_train_acc + para_train_acc + sts_train_corr) / 3
+        dev_mean_score = (sst_dev_acc + para_dev_acc + sts_dev_corr) / 3
+        if dev_mean_score > best_dev_score:
+            best_dev_score = dev_mean_score
             save_model(model, optimizer, args, config, args.filepath)
 
-        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+        print(
+            f"Epoch {epoch}: sentiment loss :: {sst_loss :.3f},\n"
+            f" paraphrase loss :: {para_loss :.3f},\n"
+            f" similarity loss :: {sts_loss :.3f},\n"
+            f" sentiment train acc :: {sst_train_acc :.3f},\n"
+            f" paraphrase train acc :: {para_train_acc :.3f},\n"
+            f" similarity train corr :: {sts_train_corr :.3f},\n"
+            f" sentiment dev acc :: {sst_dev_acc :.3f},\n"
+            f" paraphrase dev acc :: {para_dev_acc :.3f},\n"
+            f" similarity dev corr :: {sts_dev_corr :.3f},\n"
+            f" train mean score :: {train_mean_score :.3f}, "
+            f"dev mean score :: {dev_mean_score :.3f}")
+
+
+def train_sentiment(model, epoch, batch_size, optimizer, device, sst_train_dataloader):
+    print('Training on SST...')
+    train_loss = 0
+    num_batches = 0
+    for batch in tqdm(sst_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+        b_ids, b_mask, b_labels = (batch['token_ids'],
+                                    batch['attention_mask'], batch['labels'])
+
+        b_ids = b_ids.to(device)
+        b_mask = b_mask.to(device)
+        b_labels = b_labels.to(device)
+
+        optimizer.zero_grad()
+        logits = model.predict_sentiment(b_ids, b_mask)
+        loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / batch_size
+
+        loss.backward()
+        optimizer.step()
+
+        train_loss += loss.item()
+        num_batches += 1
+
+    return train_loss / (num_batches)
+
+
+def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dataloader):
+    print('Training on Quora...')
+    train_loss = 0
+    num_batches = 0
+    for batch in tqdm(para_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+        b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_labels = (batch['token_ids_1'],
+                                                          batch['attention_mask_1'], batch['token_ids_2'],
+                                                          batch['attention_mask_2'], batch['labels'])
+        b_ids_1 = b_ids_1.to(device)
+        b_mask_1 = b_mask_1.to(device)
+        b_ids_2 = b_ids_2.to(device)
+        b_mask_2 = b_mask_2.to(device)
+        b_labels = b_labels.to(device)
+
+        optimizer.zero_grad()
+        logits = model.predict_paraphrase(b_ids_1, b_mask_1, b_ids_2, b_mask_2).sigmoid().flatten()
+        loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+
+        loss.backward()
+        optimizer.step()
+
+        train_loss += loss.item()
+        num_batches += 1
+
+    return train_loss / (num_batches)
+
+
+def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_dataloader):
+    print('Training on STS...')
+    train_loss = 0
+    num_batches = 0
+    for batch in tqdm(sts_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+        b_ids_1, b_mask_1, b_ids_2, b_mask_2, b_labels = (batch['token_ids_1'],
+                                                          batch['attention_mask_1'], batch['token_ids_2'],
+                                                          batch['attention_mask_2'], batch['labels'])
+        b_ids_1 = b_ids_1.to(device)
+        b_mask_1 = b_mask_1.to(device)
+        b_ids_2 = b_ids_2.to(device)
+        b_mask_2 = b_mask_2.to(device)
+        b_labels = b_labels.to(device)
+
+        optimizer.zero_grad()
+        logits = model.predict_similarity(b_ids_1, b_mask_1, b_ids_2, b_mask_2).flatten()
+        loss = F.mse_loss(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+
+        loss.backward()
+        optimizer.step()
+
+        train_loss += loss.item()
+        num_batches += 1
+
+    return train_loss / (num_batches)
 
 
 def test_multitask(args):
@@ -259,35 +358,35 @@ def test_multitask(args):
                                           para_test_dataloader,
                                           sts_test_dataloader, model, device)
 
-        with open(args.sst_dev_out, "w+") as f:
+        with open(args.sst_dev_out, "w+", encoding='utf8') as f:
             print(f"dev sentiment acc :: {dev_sentiment_accuracy :.3f}")
             f.write(f"id \t Predicted_Sentiment \n")
             for p, s in zip(dev_sst_sent_ids, dev_sst_y_pred):
                 f.write(f"{p} , {s} \n")
 
-        with open(args.sst_test_out, "w+") as f:
+        with open(args.sst_test_out, "w+", encoding='utf8') as f:
             f.write(f"id \t Predicted_Sentiment \n")
             for p, s in zip(test_sst_sent_ids, test_sst_y_pred):
                 f.write(f"{p} , {s} \n")
 
-        with open(args.para_dev_out, "w+") as f:
+        with open(args.para_dev_out, "w+", encoding='utf8') as f:
             print(f"dev paraphrase acc :: {dev_paraphrase_accuracy :.3f}")
             f.write(f"id \t Predicted_Is_Paraphrase \n")
             for p, s in zip(dev_para_sent_ids, dev_para_y_pred):
                 f.write(f"{p} , {s} \n")
 
-        with open(args.para_test_out, "w+") as f:
+        with open(args.para_test_out, "w+", encoding='utf8') as f:
             f.write(f"id \t Predicted_Is_Paraphrase \n")
             for p, s in zip(test_para_sent_ids, test_para_y_pred):
                 f.write(f"{p} , {s} \n")
 
-        with open(args.sts_dev_out, "w+") as f:
+        with open(args.sts_dev_out, "w+", encoding='utf8') as f:
             print(f"dev sts corr :: {dev_sts_corr :.3f}")
             f.write(f"id \t Predicted_Similiary \n")
             for p, s in zip(dev_sts_sent_ids, dev_sts_y_pred):
                 f.write(f"{p} , {s} \n")
 
-        with open(args.sts_test_out, "w+") as f:
+        with open(args.sts_test_out, "w+", encoding='utf8') as f:
             f.write(f"id \t Predicted_Similiary \n")
             for p, s in zip(test_sts_sent_ids, test_sts_y_pred):
                 f.write(f"{p} , {s} \n")
