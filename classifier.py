@@ -418,6 +418,7 @@ if __name__ == "__main__":
         lr=args.lr,
         use_gpu=args.use_gpu,
         epochs=args.epochs,
+        use_smart = args.use_smart,
         batch_size=8,
         hidden_dropout_prob=args.hidden_dropout_prob,
         train='data/ids-cfimdb-train.csv',
