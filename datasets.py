@@ -208,6 +208,91 @@ class SentencePairTestDataset(Dataset):
         return batched_data
 
 
+class SentenceConcatenatedPairDataset(Dataset):
+    def __init__(self, dataset, args, isRegression=False):
+        self.dataset = dataset
+        self.p = args
+        self.isRegression = isRegression
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        return self.dataset[idx]
+
+    def pad_data(self, data):
+        concatenated_sent = [x[0] + self.tokenizer.sep_token + x[1] for x in data]
+        labels = [x[2] for x in data]
+        sent_ids = [x[3] for x in data]
+
+        encoding = self.tokenizer(concatenated_sent, return_tensors='pt', padding=True, truncation=True)
+
+        token_ids = torch.LongTensor(encoding['input_ids'])
+        attention_mask = torch.LongTensor(encoding['attention_mask'])
+        token_type_ids = torch.LongTensor(encoding['token_type_ids'])
+
+        if self.isRegression:
+            labels = torch.DoubleTensor(labels)
+        else:
+            labels = torch.LongTensor(labels)
+
+        return token_ids, token_type_ids, attention_mask, labels, sent_ids
+
+    def collate_fn(self, all_data):
+        (token_ids, token_type_ids, attention_mask,
+         labels, sent_ids) = self.pad_data(all_data)
+
+        batched_data = {
+                'token_ids': token_ids,
+                'token_type_ids': token_type_ids,
+                'attention_mask': attention_mask,
+                'labels': labels,
+                'sent_ids': sent_ids
+            }
+
+        return batched_data
+
+
+# Unlike SentencePairDataset, we do not load labels in SentencePairTestDataset.
+class SentenceConcatenatedPairTestDataset(Dataset):
+    def __init__(self, dataset, args):
+        self.dataset = dataset
+        self.p = args
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        return self.dataset[idx]
+
+    def pad_data(self, data):
+        concatenated_sent = [x[0] + self.tokenizer.sep_token + x[1] for x in data]
+        sent_ids = [x[2] for x in data]
+
+        encoding = self.tokenizer(concatenated_sent, return_tensors='pt', padding=True, truncation=True)
+
+        token_ids = torch.LongTensor(encoding['input_ids'])
+        attention_mask = torch.LongTensor(encoding['attention_mask'])
+        token_type_ids = torch.LongTensor(encoding['token_type_ids'])
+
+
+        return token_ids, token_type_ids, attention_mask, sent_ids
+
+    def collate_fn(self, all_data):
+        (token_ids, token_type_ids, attention_mask,
+         sent_ids) = self.pad_data(all_data)
+
+        batched_data = {
+                'token_ids_1': token_ids,
+                'token_type_ids_1': token_type_ids,
+                'attention_mask_1': attention_mask,
+                'sent_ids': sent_ids
+            }
+
+        return batched_data
+
 def load_multitask_data(sentiment_filename,paraphrase_filename,similarity_filename,split='train'):
     sentiment_data = []
     num_labels = {}

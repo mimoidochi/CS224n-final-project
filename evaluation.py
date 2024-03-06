@@ -68,6 +68,7 @@ def model_eval_multitask(sentiment_dataloader,
             y_hat = logits.argmax(dim=-1).flatten().cpu().numpy()
             b_labels = b_labels.flatten().cpu().numpy()
 
+            assert(len(y_hat) == len(b_labels))
             sst_y_pred.extend(y_hat)
             sst_y_true.extend(b_labels)
             sst_sent_ids.extend(b_sent_ids)
@@ -79,21 +80,16 @@ def model_eval_multitask(sentiment_dataloader,
         para_y_pred = []
         para_sent_ids = []
         for step, batch in enumerate(tqdm(paraphrase_dataloader, desc=f'eval', disable=TQDM_DISABLE)):
-            (b_ids1, b_mask1,
-             b_ids2, b_mask2,
-             b_labels, b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
-                          batch['token_ids_2'], batch['attention_mask_2'],
-                          batch['labels'], batch['sent_ids'])
+            b_ids, b_mask, b_labels, b_sent_ids = batch['token_ids'], batch['attention_mask'], batch['labels'], batch['sent_ids']
 
-            b_ids1 = b_ids1.to(device)
-            b_mask1 = b_mask1.to(device)
-            b_ids2 = b_ids2.to(device)
-            b_mask2 = b_mask2.to(device)
+            b_ids = b_ids.to(device)
+            b_mask = b_mask.to(device)
 
-            logits = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2, b_sent_ids)
+            logits = model.predict_paraphrase(b_ids, b_mask, b_sent_ids)
             y_hat = logits.sigmoid().round().flatten().cpu().numpy()
             b_labels = b_labels.flatten().cpu().numpy()
 
+            assert (len(y_hat) == len(b_labels))
             para_y_pred.extend(y_hat)
             para_y_true.extend(b_labels)
             para_sent_ids.extend(b_sent_ids)
@@ -105,21 +101,16 @@ def model_eval_multitask(sentiment_dataloader,
         sts_y_pred = []
         sts_sent_ids = []
         for step, batch in enumerate(tqdm(sts_dataloader, desc=f'eval', disable=TQDM_DISABLE)):
-            (b_ids1, b_mask1,
-             b_ids2, b_mask2,
-             b_labels, b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
-                          batch['token_ids_2'], batch['attention_mask_2'],
-                          batch['labels'], batch['sent_ids'])
+            b_ids, b_mask, b_labels, b_sent_ids = batch['token_ids'], batch['attention_mask'], batch['labels'], batch['sent_ids']
 
-            b_ids1 = b_ids1.to(device)
-            b_mask1 = b_mask1.to(device)
-            b_ids2 = b_ids2.to(device)
-            b_mask2 = b_mask2.to(device)
+            b_ids = b_ids.to(device)
+            b_mask = b_mask.to(device)
 
-            logits = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2, b_sent_ids)
+            logits = model.predict_similarity(b_ids, b_mask, b_sent_ids)
             y_hat = logits.flatten().cpu().numpy()
             b_labels = b_labels.flatten().cpu().numpy()
 
+            assert (len(y_hat) == len(b_labels))
             sts_y_pred.extend(y_hat)
             sts_y_true.extend(b_labels)
             sts_sent_ids.extend(b_sent_ids)
@@ -162,18 +153,12 @@ def model_eval_test_multitask(sentiment_dataloader,
         para_y_pred = []
         para_sent_ids = []
         for step, batch in enumerate(tqdm(paraphrase_dataloader, desc=f'eval', disable=TQDM_DISABLE)):
-            (b_ids1, b_mask1,
-             b_ids2, b_mask2,
-             b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
-                          batch['token_ids_2'], batch['attention_mask_2'],
-                          batch['sent_ids'])
+            b_ids, b_mask, b_sent_ids = batch['token_ids'], batch['attention_mask'],  batch['sent_ids']
 
-            b_ids1 = b_ids1.to(device)
-            b_mask1 = b_mask1.to(device)
-            b_ids2 = b_ids2.to(device)
-            b_mask2 = b_mask2.to(device)
+            b_ids = b_ids.to(device)
+            b_mask = b_mask.to(device)
 
-            logits = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2, b_sent_ids)
+            logits = model.predict_paraphrase(b_ids, b_mask, b_sent_ids)
             y_hat = logits.sigmoid().round().flatten().cpu().numpy()
 
             para_y_pred.extend(y_hat)
@@ -183,18 +168,12 @@ def model_eval_test_multitask(sentiment_dataloader,
         sts_y_pred = []
         sts_sent_ids = []
         for step, batch in enumerate(tqdm(sts_dataloader, desc=f'eval', disable=TQDM_DISABLE)):
-            (b_ids1, b_mask1,
-             b_ids2, b_mask2,
-             b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
-                          batch['token_ids_2'], batch['attention_mask_2'],
-                          batch['sent_ids'])
+            b_ids, b_mask, b_sent_ids = batch['token_ids'], batch['attention_mask'],  batch['sent_ids']
 
-            b_ids1 = b_ids1.to(device)
-            b_mask1 = b_mask1.to(device)
-            b_ids2 = b_ids2.to(device)
-            b_mask2 = b_mask2.to(device)
+            b_ids = b_ids.to(device)
+            b_mask = b_mask.to(device)
 
-            logits = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2, b_sent_ids)
+            logits = model.predict_similarity(b_ids, b_mask, b_sent_ids)
             y_hat = logits.flatten().cpu().numpy()
 
             sts_y_pred.extend(y_hat)
