@@ -285,9 +285,9 @@ class SentenceConcatenatedPairTestDataset(Dataset):
          sent_ids) = self.pad_data(all_data)
 
         batched_data = {
-                'token_ids_1': token_ids,
-                'token_type_ids_1': token_type_ids,
-                'attention_mask_1': attention_mask,
+                'token_ids': token_ids,
+                'token_type_ids': token_type_ids,
+                'attention_mask': attention_mask,
                 'sent_ids': sent_ids
             }
 
