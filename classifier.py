@@ -53,15 +53,20 @@ class BertSentimentClassifier(torch.nn.Module):
         self.classes = nn.Linear(config.hidden_size, config.num_labels)
 
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, output_hidden_states=False):
         '''Takes a batch of sentences and returns logits for sentiment classes'''
         # The final BERT contextualized embedding is the hidden state of [CLS] token (the first token).
         # HINT: You should consider what is an appropriate return value given that
         # the training loop currently uses F.cross_entropy as the loss function.
         ### TODO
-        logits = self.bert(input_ids, attention_mask)['pooler_output']
-        #logits = self.hidden_dropout(logits)
-        logits = F.softmax(self.classes(logits), dim=1)
+
+        bert_outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = bert_outputs['pooler_output']
+        logits = self.hidden_dropout(pooled_output)
+        logits = self.classes(logits)
+        logits = F.softmax(logits, dim=1)
+        if output_hidden_states:
+            return logits, bert_outputs['last_hidden_state']
         return logits
 
 
@@ -234,6 +239,21 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
+def apply_perturbations(embeddings, std=0.01):
+    """
+    Applies Gaussian noise perturbations to the embeddings.
+
+    Parameters:
+    - embeddings: Tensor, the original embeddings.
+    - std: float, standard deviation of the Gaussian noise to be added.
+
+    Returns:
+    - perturbed_embeddings: Tensor, embeddings with Gaussian noise added.
+    """
+    noise = torch.randn_like(embeddings) * std
+    perturbed_embeddings = embeddings + noise
+    return perturbed_embeddings
+
 
 def train(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
@@ -279,13 +299,26 @@ def train(args):
             b_labels = b_labels.to(device)
 
             optimizer.zero_grad()
-            logits = model(b_ids, b_mask)
-            loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+            logits, hidden_state = model(b_ids, b_mask, output_hidden_states = True)
+            original_loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+            if args.use_smart:    
+                hidden_state_perturbed = apply_perturbations(hidden_state)
+                first_tk = hidden_state_perturbed[:, 0]
+                first_tk = model.bert.pooler_dense(first_tk)
+                pooled_output = model.bert.pooler_af(first_tk)
+                logits_perturbed = model.hidden_dropout(pooled_output)
+                logits_perturbed = model.classes(logits_perturbed)
+                logits_perturbed = F.softmax(logits_perturbed, dim=1)
+                smart_reg = ((logits - logits_perturbed) ** 2).mean()
+                final_loss = original_loss + 0.1 * smart_reg # reg coeff 0.1 is a hyperparameter
+            else:
+                final_loss = original_loss
 
-            loss.backward()
+            final_loss.backward()
+
             optimizer.step()
 
-            train_loss += loss.item()
+            train_loss += final_loss.item()
             num_batches += 1
 
         train_loss = train_loss / (num_batches)
@@ -338,6 +371,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=11711)
     parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--use_smart", action='store_false')
     parser.add_argument("--option", type=str,
                         help='pretrain: the BERT parameters are frozen; finetune: BERT parameters are updated',
                         choices=('pretrain', 'finetune'), default="pretrain")
@@ -362,6 +396,7 @@ if __name__ == "__main__":
         lr=args.lr,
         use_gpu=args.use_gpu,
         epochs=args.epochs,
+        use_smart = args.use_smart,
         batch_size=args.batch_size,
         hidden_dropout_prob=args.hidden_dropout_prob,
         train='data/ids-sst-train.csv',
@@ -383,6 +418,7 @@ if __name__ == "__main__":
         lr=args.lr,
         use_gpu=args.use_gpu,
         epochs=args.epochs,
+        use_smart = args.use_smart,
         batch_size=8,
         hidden_dropout_prob=args.hidden_dropout_prob,
         train='data/ids-cfimdb-train.csv',
