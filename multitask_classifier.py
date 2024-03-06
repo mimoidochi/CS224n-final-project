@@ -326,7 +326,7 @@ def test_multitask(args):
     '''Test and save predictions on the dev and test sets of all three tasks.'''
     with torch.no_grad():
         device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-        saved = torch.load(args.filepath)
+        saved = torch.load(args.filepath, map_location=device)
         config = saved['model_config']
 
         model = MultitaskBERT(config)
