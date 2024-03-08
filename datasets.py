@@ -293,7 +293,7 @@ class SentenceConcatenatedPairTestDataset(Dataset):
 
         return batched_data
 
-def load_multitask_data(sentiment_filename,paraphrase_filename,similarity_filename,split='train'):
+def load_multitask_data(sentiment_filename,paraphrase_filename,similarity_filename,polar_sentiment_filename,split='train'):
     sentiment_data = []
     num_labels = {}
     if split == 'test':
@@ -313,6 +313,23 @@ def load_multitask_data(sentiment_filename,paraphrase_filename,similarity_filena
                 sentiment_data.append((sent, label,sent_id))
 
     print(f"Loaded {len(sentiment_data)} {split} examples from {sentiment_filename}")
+
+    polar_sentiment_data = []
+    if split == 'test':
+        with open(polar_sentiment_filename, 'r', encoding='utf8') as fp:
+            for record in csv.DictReader(fp,delimiter = '\t'):
+                sent = record['sentence'].lower().strip()
+                sent_id = record['id'].lower().strip()
+                polar_sentiment_data.append((sent,sent_id))
+    else:
+        with open(polar_sentiment_filename, 'r', encoding='utf8') as fp:
+            for record in csv.DictReader(fp,delimiter = '\t'):
+                sent = record['sentence'].lower().strip()
+                sent_id = record['id'].lower().strip()
+                label = int(record['sentiment'].strip())
+                polar_sentiment_data.append((sent, label, sent_id))
+
+    print(f"Loaded {len(polar_sentiment_data)} {split} examples from {polar_sentiment_filename}")
 
     paraphrase_data = []
     if split == 'test':
@@ -354,4 +371,4 @@ def load_multitask_data(sentiment_filename,paraphrase_filename,similarity_filena
 
     print(f"Loaded {len(similarity_data)} {split} examples from {similarity_filename}")
 
-    return sentiment_data, num_labels, paraphrase_data, similarity_data
+    return sentiment_data, num_labels, paraphrase_data, similarity_data, polar_sentiment_data
