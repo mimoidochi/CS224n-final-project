@@ -391,11 +391,11 @@ def test_multitask(args):
         model = model.to(device)
         print(f"Loaded model to test from {args.filepath}")
 
-        sst_test_data, num_labels,para_test_data, sts_test_data = \
-            load_multitask_data(args.sst_test,args.para_test, args.sts_test, split='test')
+        sst_test_data, num_labels,para_test_data, sts_test_data, _ = \
+            load_multitask_data(args.sst_test,args.para_test, args.sts_test, args.cfimdb_test, split='test')
 
-        sst_dev_data, num_labels,para_dev_data, sts_dev_data = \
-            load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev,split='dev')
+        sst_dev_data, num_labels,para_dev_data, sts_dev_data, _ = \
+            load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, args.cfimdb_dev, split='dev')
 
         sst_test_data = SentenceClassificationTestDataset(sst_test_data, args)
         sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
