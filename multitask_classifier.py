@@ -371,7 +371,8 @@ def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dat
 
         optimizer.zero_grad()
 
-        logits, hidden_state = model.predict_paraphrase(b_ids, b_mask, b_sent_ids, output_hidden_states = True).sigmoid().flatten()
+        prediction = model.predict_paraphrase(b_ids, b_mask, b_sent_ids, output_hidden_states = True)
+        logits, hidden_state = prediction[0].sigmoid().flatten(), prediction[1]
         original_loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
 
         if use_smart:    
@@ -411,7 +412,8 @@ def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_data
 
         optimizer.zero_grad()
 
-        logits, hidden_state = model.predict_similarity(b_ids, b_mask, b_sent_ids, output_hidden_states = True).flatten()
+        sim_prediction = model.predict_similarity(b_ids, b_mask, b_sent_ids, output_hidden_states = True)
+        logits, hidden_state = sim_prediction[0].flatten(), sim_prediction[1]
         original_loss = F.mse_loss(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
 
         if use_smart:    
@@ -449,7 +451,8 @@ def train_polar_sentiment(model, epoch, batch_size, optimizer, device, cfimdb_tr
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits, hidden_state = model.predict_polar_sentiment(b_ids, b_mask, b_sent_ids, output_hidden_states = True).sigmoid().flatten()
+        polar_prediction = model.predict_polar_sentiment(b_ids, b_mask, b_sent_ids, output_hidden_states = True)
+        logits, hidden_state = polar_prediction[0].sigmoid().flatten(), polar_prediction[1]
         # loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
         original_loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
         if use_smart:    
