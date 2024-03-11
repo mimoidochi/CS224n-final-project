@@ -52,6 +52,20 @@ def seed_everything(seed=11711):
 BERT_HIDDEN_SIZE = 768
 N_SENTIMENT_CLASSES = 5
 
+def apply_perturbations(embeddings, std=0.01):
+    """
+    Applies Gaussian noise perturbations to the embeddings.
+
+    Parameters:
+    - embeddings: Tensor, the original embeddings.
+    - std: float, standard deviation of the Gaussian noise to be added.
+
+    Returns:
+    - perturbed_embeddings: Tensor, embeddings with Gaussian noise added.
+    """
+    noise = torch.randn_like(embeddings) * std
+    perturbed_embeddings = embeddings + noise
+    return perturbed_embeddings
 
 class MultitaskBERT(nn.Module):
     '''
@@ -81,16 +95,19 @@ class MultitaskBERT(nn.Module):
         self.bert_cache = {}
         self.pretrain = config.option == 'pretrain'
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, output_hidden_states = False):
         'Takes a batch of sentences and produces embeddings for them.'
         # The final BERT embedding is the hidden state of [CLS] token (the first token)
         # Here, you can start by just returning the embeddings straight from BERT.
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         ### TODO
-        return self.bert(input_ids, attention_mask)['pooler_output']
-
-    def predict_sentiment(self, input_ids, attention_mask, sent_ids):
+        output = self.bert(input_ids, attention_mask)
+        if not output_hidden_states:
+            return output['pooler_output']
+        return output['pooler_output'], output['last_hidden_state']
+        
+    def predict_sentiment(self, input_ids, attention_mask, sent_ids, output_hidden_states = False):
         '''Given a batch of sentences, outputs logits for classifying sentiment.
         There are 5 sentiment classes:
         (0 - negative, 1- somewhat negative, 2- neutral, 3- somewhat positive, 4- positive)
@@ -106,11 +123,17 @@ class MultitaskBERT(nn.Module):
                 bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
             bert_embedding = torch.stack(bert_encodings)
         else:
-            bert_embedding = self.forward(input_ids, attention_mask)
+            if output_hidden_states:
+                bert_embedding, hidden_state = self.forward(input_ids, attention_mask, output_hidden_states)
+            else:
+                bert_embedding = self.forward(input_ids, attention_mask, output_hidden_states)
         logits = F.softmax(self.sentiment_layer(bert_embedding), dim=1)
-        return logits
+        if output_hidden_states:
+            return logits, hidden_state
+        else:
+            return logits
 
-    def predict_paraphrase(self, input_ids, attention_mask, sent_ids):
+    def predict_paraphrase(self, input_ids, attention_mask, sent_ids, output_hidden_states = False):
         '''Given a batch of pairs of sentences, outputs a single logit for predicting whether they are paraphrases.
         Note that your output should be unnormalized (a logit); it will be passed to the sigmoid function
         during evaluation.
@@ -125,11 +148,16 @@ class MultitaskBERT(nn.Module):
                 bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
             sent_embedding = torch.stack(bert_encodings)
         else:
-            sent_embedding = self.forward(input_ids, attention_mask)
+            if output_hidden_states:
+                sent_embedding, hidden_state = self.forward(input_ids, attention_mask, output_hidden_states)
+            else:
+                sent_embedding = self.forward(input_ids, attention_mask, output_hidden_states)
         logits = self.paraphrase_layer(sent_embedding)
+        if output_hidden_states:
+            return logits, hidden_state
         return logits
 
-    def predict_similarity(self, input_ids, attention_mask, sent_ids):
+    def predict_similarity(self, input_ids, attention_mask, sent_ids, output_hidden_states = False):
         '''Given a batch of pairs of sentences, outputs a single logit corresponding to how similar they are.
         Note that your output should be unnormalized (a logit).
         '''
@@ -144,11 +172,16 @@ class MultitaskBERT(nn.Module):
                 bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
             sent_embedding = torch.stack(bert_encodings)
         else:
-            sent_embedding = self.forward(input_ids, attention_mask)
+            if output_hidden_states:
+                sent_embedding, hidden_state = self.forward(input_ids, attention_mask, output_hidden_states)
+            else:
+                sent_embedding = self.forward(input_ids, attention_mask, output_hidden_states)
         logits = self.similarity_layer(sent_embedding)
+        if output_hidden_states:
+            return logits, hidden_state
         return logits
 
-    def predict_polar_sentiment(self, input_ids, attention_mask, sent_ids):
+    def predict_polar_sentiment(self, input_ids, attention_mask, sent_ids, output_hidden_states = False):
         sent_embedding = None
         if self.pretrain:
             bert_encodings = []
@@ -159,10 +192,14 @@ class MultitaskBERT(nn.Module):
                 bert_encodings.append(self.bert_cache[sent_ids[i]].flatten())
             sent_embedding = torch.stack(bert_encodings)
         else:
-            sent_embedding = self.forward(input_ids, attention_mask)
+            if output_hidden_states:
+                sent_embedding, hidden_state = self.forward(input_ids, attention_mask, output_hidden_states)
+            else:
+                sent_embedding = self.forward(input_ids, attention_mask, output_hidden_states)
         logits = self.polar_sentiment_layer(sent_embedding)
+        if output_hidden_states:
+            return logits, hidden_state
         return logits
-
 
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
@@ -245,10 +282,10 @@ def train_multitask(args):
                                            collate_fn=para_train_data.collate_fn)
         polar_loss = 0
         if args.use_cfimdb:
-            polar_loss = train_polar_sentiment(model, epoch, args.batch_size, optimizer, device, cfimdb_train_dataloader)
-        sst_loss = train_sentiment(model, epoch, args.batch_size, optimizer, device, sst_train_dataloader)
-        para_loss = train_paraphrase(model, epoch, args.batch_size, optimizer, device, para_train_dataloader)
-        sts_loss = train_similarity(model, epoch, args.batch_size, optimizer, device, sts_train_dataloader)
+            polar_loss = train_polar_sentiment(model, epoch, args.batch_size, optimizer, device, cfimdb_train_dataloader, args.use_smart)
+        sst_loss = train_sentiment(model, epoch, args.batch_size, optimizer, device, sst_train_dataloader, args.use_smart)
+        para_loss = train_paraphrase(model, epoch, args.batch_size, optimizer, device, para_train_dataloader, args.use_smart)
+        sts_loss = train_similarity(model, epoch, args.batch_size, optimizer, device, sts_train_dataloader, args.use_smart)
 
         sst_train_acc, _, _, para_train_acc, _, _, sts_train_corr, *_ = model_eval_multitask(sst_train_dataloader,
                                                                                              para_train_dataloader,
@@ -279,7 +316,7 @@ def train_multitask(args):
             f"dev mean score :: {dev_mean_score :.3f}")
 
 
-def train_sentiment(model, epoch, batch_size, optimizer, device, sst_train_dataloader):
+def train_sentiment(model, epoch, batch_size, optimizer, device, sst_train_dataloader, use_smart):
     print('Training on SST...')
     train_loss = 0
     num_batches = 0
@@ -292,19 +329,35 @@ def train_sentiment(model, epoch, batch_size, optimizer, device, sst_train_datal
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_sentiment(b_ids, b_mask, b_sent_ids)
-        loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / batch_size
+        # logits = model.predict_sentiment(b_ids, b_mask, b_sent_ids)
+        # loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / batch_size
+        logits, hidden_state = model.predict_sentiment(b_ids, b_mask, b_sent_ids, output_hidden_states = True)
 
-        loss.backward()
+        original_loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / batch_size
+        if use_smart:    
+            hidden_state_perturbed = apply_perturbations(hidden_state)
+            first_tk = hidden_state_perturbed[:, 0]
+            first_tk = model.bert.pooler_dense(first_tk)
+            pooled_output = model.bert.pooler_af(first_tk)
+            logits_perturbed = model.hidden_dropout(pooled_output)
+            logits_perturbed = model.sentiment_layer(logits_perturbed)
+            logits_perturbed = F.softmax(logits_perturbed, dim=1)
+            smart_reg = ((logits - logits_perturbed) ** 2).mean()
+            final_loss = original_loss + 0.1 * smart_reg # reg coeff 0.1 is a hyperparameter
+        else:
+            final_loss = original_loss
+
+
+        final_loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
+        train_loss += final_loss.item()
         num_batches += 1
 
     return train_loss / (num_batches)
 
 
-def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dataloader):
+def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dataloader, use_smart):
     print('Training on Quora...')
     train_loss = 0
     num_batches = 0
@@ -317,19 +370,34 @@ def train_paraphrase(model, epoch, batch_size, optimizer, device, para_train_dat
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_paraphrase(b_ids, b_mask, b_sent_ids).sigmoid().flatten()
-        loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
 
-        loss.backward()
+        logits, hidden_state = model.predict_paraphrase(b_ids, b_mask, b_sent_ids, output_hidden_states = True).sigmoid().flatten()
+        original_loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+
+        if use_smart:    
+            hidden_state_perturbed = apply_perturbations(hidden_state)
+            first_tk = hidden_state_perturbed[:, 0]
+            first_tk = model.bert.pooler_dense(first_tk)
+            pooled_output = model.bert.pooler_af(first_tk)
+            logits_perturbed = model.hidden_dropout(pooled_output)
+            logits_perturbed = model.paraphrase_layer(logits_perturbed)
+            logits_perturbed = F.softmax(logits_perturbed, dim=1)
+            smart_reg = ((logits - logits_perturbed) ** 2).mean()
+            final_loss = original_loss + 0.1 * smart_reg # reg coeff 0.1 is a hyperparameter
+        else:
+            final_loss = original_loss
+
+
+        final_loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
+        train_loss += final_loss.item()
         num_batches += 1
 
     return train_loss / num_batches
 
 
-def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_dataloader):
+def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_dataloader, use_smart):
     print('Training on STS...')
     train_loss = 0
     num_batches = 0
@@ -342,19 +410,33 @@ def train_similarity(model, epoch, batch_size, optimizer, device, sts_train_data
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_similarity(b_ids, b_mask, b_sent_ids).flatten()
-        loss = F.mse_loss(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
 
-        loss.backward()
+        logits, hidden_state = model.predict_similarity(b_ids, b_mask, b_sent_ids, output_hidden_states = True).flatten()
+        original_loss = F.mse_loss(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+
+        if use_smart:    
+            hidden_state_perturbed = apply_perturbations(hidden_state)
+            first_tk = hidden_state_perturbed[:, 0]
+            first_tk = model.bert.pooler_dense(first_tk)
+            pooled_output = model.bert.pooler_af(first_tk)
+            logits_perturbed = model.hidden_dropout(pooled_output)
+            logits_perturbed = model.similarity_layer(logits_perturbed)
+            logits_perturbed = F.softmax(logits_perturbed, dim=1)
+            smart_reg = ((logits - logits_perturbed) ** 2).mean()
+            final_loss = original_loss + 0.1 * smart_reg # reg coeff 0.1 is a hyperparameter
+        else:
+            final_loss = original_loss
+
+        final_loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
+        train_loss += final_loss.item()
         num_batches += 1
 
     return train_loss / num_batches
 
 
-def train_polar_sentiment(model, epoch, batch_size, optimizer, device, cfimdb_train_dataloader):
+def train_polar_sentiment(model, epoch, batch_size, optimizer, device, cfimdb_train_dataloader, use_smart):
     print('Training on CFIMDB...')
     train_loss = 0
     num_batches = 0
@@ -367,13 +449,26 @@ def train_polar_sentiment(model, epoch, batch_size, optimizer, device, cfimdb_tr
         b_labels = b_labels.to(device)
 
         optimizer.zero_grad()
-        logits = model.predict_polar_sentiment(b_ids, b_mask, b_sent_ids).sigmoid().flatten()
-        loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+        logits, hidden_state = model.predict_polar_sentiment(b_ids, b_mask, b_sent_ids, output_hidden_states = True).sigmoid().flatten()
+        # loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+        original_loss = F.binary_cross_entropy(logits, b_labels.view(-1).float(), reduction='sum') / batch_size
+        if use_smart:    
+            hidden_state_perturbed = apply_perturbations(hidden_state)
+            first_tk = hidden_state_perturbed[:, 0]
+            first_tk = model.bert.pooler_dense(first_tk)
+            pooled_output = model.bert.pooler_af(first_tk)
+            logits_perturbed = model.hidden_dropout(pooled_output)
+            logits_perturbed = model.polar_sentiment_layer(logits_perturbed)
+            logits_perturbed = F.softmax(logits_perturbed, dim=1)
+            smart_reg = ((logits - logits_perturbed) ** 2).mean()
+            final_loss = original_loss + 0.1 * smart_reg # reg coeff 0.1 is a hyperparameter
+        else:
+            final_loss = original_loss
 
-        loss.backward()
+        final_loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
+        train_loss += final_loss.item()
         num_batches += 1
 
     return train_loss / num_batches
@@ -487,6 +582,8 @@ def get_args():
 
     parser.add_argument("--seed", type=int, default=11711)
     parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--use_smart", type=bool, default=False)
+
     parser.add_argument("--option", type=str,
                         help='pretrain: the BERT parameters are frozen; finetune: BERT parameters are updated; evaluate: the model is evaluated on dev and test datasets',
                         choices=('pretrain', 'finetune', 'evaluate'), default="pretrain")
@@ -514,7 +611,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     if not args.filepath:
-        args.filepath = f'{args.option}-{args.epochs}-{args.lr}-multitask.pt' # Save path.
+        args.filepath = f'{args.option}-{args.epochs}-{args.lr}-{args.use_smart}-multitask.pt' # Save path.
     seed_everything(args.seed)  # Fix the seed for reproducibility.
     if args.option == 'evaluate':
         test_multitask(args)
