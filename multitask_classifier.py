@@ -107,7 +107,9 @@ class MultitaskBERT(nn.Module):
             bert_embedding = torch.stack(bert_encodings)
         else:
             bert_embedding = self.forward(input_ids, attention_mask)
-        logits = F.softmax(self.sentiment_layer(bert_embedding), dim=1)
+        f = self.hidden_dropout(bert_embedding)
+        f = self.sentiment_layer(f)
+        logits = F.softmax(f, dim=1)
         return logits
 
     def predict_paraphrase(self, input_ids, attention_mask, sent_ids):
@@ -126,7 +128,8 @@ class MultitaskBERT(nn.Module):
             sent_embedding = torch.stack(bert_encodings)
         else:
             sent_embedding = self.forward(input_ids, attention_mask)
-        logits = self.paraphrase_layer(sent_embedding)
+        f = self.hidden_dropout(sent_embedding)
+        logits = self.paraphrase_layer(f)
         return logits
 
     def predict_similarity(self, input_ids, attention_mask, sent_ids):
@@ -145,7 +148,8 @@ class MultitaskBERT(nn.Module):
             sent_embedding = torch.stack(bert_encodings)
         else:
             sent_embedding = self.forward(input_ids, attention_mask)
-        logits = self.similarity_layer(sent_embedding)
+        f = self.hidden_dropout(sent_embedding)
+        logits = self.similarity_layer(f)
         return logits
 
     def predict_polar_sentiment(self, input_ids, attention_mask, sent_ids):
@@ -160,7 +164,8 @@ class MultitaskBERT(nn.Module):
             sent_embedding = torch.stack(bert_encodings)
         else:
             sent_embedding = self.forward(input_ids, attention_mask)
-        logits = self.polar_sentiment_layer(sent_embedding)
+        f = self.hidden_dropout(sent_embedding)
+        logits = self.polar_sentiment_layer(f)
         return logits
 
 
@@ -236,6 +241,7 @@ def train_multitask(args):
     optimizer = AdamW(model.parameters(), lr=args.lr)
     # Run for the specified number of epochs.
     para_data_subsets = random_split(para_train_data, [1/17] * 17)
+    sts_data_subsets = random_split(sts_train_data, [1/17] * 17)
     best_dev_score = 0
     for epoch in range(args.epochs):
         model.train()
@@ -243,6 +249,11 @@ def train_multitask(args):
         para_train_dataloader = DataLoader(para_data_subsets[epoch % len(para_data_subsets)],
                                            shuffle=True, batch_size=args.batch_size,
                                            collate_fn=para_train_data.collate_fn)
+
+        sts_train_dataloader = DataLoader(sts_data_subsets[epoch % len(sts_data_subsets)],
+                                           shuffle=True, batch_size=args.batch_size,
+                                           collate_fn=sts_train_data.collate_fn)
+
         polar_loss = 0
         if args.use_cfimdb:
             polar_loss = train_polar_sentiment(model, epoch, args.batch_size, optimizer, device, cfimdb_train_dataloader)
