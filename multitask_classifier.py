@@ -292,6 +292,7 @@ def train_multitask(args):
     optimizer = AdamW(model.parameters(), lr=args.lr)
     # Run for the specified number of epochs.
     para_data_subsets = random_split(para_train_data, [1/17] * 17)
+    sts_data_subsets = random_split(sts_train_data, [1/17] * 17)
     best_dev_score = 0
     for epoch in range(args.epochs):
         model.train()
@@ -299,6 +300,11 @@ def train_multitask(args):
         para_train_dataloader = DataLoader(para_data_subsets[epoch % len(para_data_subsets)],
                                            shuffle=True, batch_size=args.batch_size,
                                            collate_fn=para_train_data.collate_fn)
+
+        sts_train_dataloader = DataLoader(sts_data_subsets[epoch % len(sts_data_subsets)],
+                                           shuffle=True, batch_size=args.batch_size,
+                                           collate_fn=sts_train_data.collate_fn)
+
         polar_loss = 0
         if args.use_cfimdb:
             polar_loss = train_polar_sentiment(model, epoch, args.batch_size, optimizer, device, cfimdb_train_dataloader, args.use_smart)
