@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader, random_split
 from bert import BertModel
 from optimizer import AdamW
 from tqdm import tqdm
+from pcgrad import PCGrad
 
 from datasets import (
     SentenceClassificationDataset,
@@ -204,7 +205,7 @@ class MultitaskBERT(nn.Module):
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
         'model': model.state_dict(),
-        'optim': optimizer.state_dict(),
+        #'optim': optimizer.state_dict(),
         'args': args,
         'model_config': config,
         'system_rng': random.getstate(),
@@ -270,7 +271,8 @@ def train_multitask(args):
     model = MultitaskBERT(config)
     model = model.to(device)
 
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = PCGrad(optimizer)
     # Run for the specified number of epochs.
     para_data_subsets = random_split(para_train_data, [1/17] * 17)
     best_dev_score = 0
