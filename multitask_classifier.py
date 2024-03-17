@@ -293,27 +293,104 @@ def train_multitask(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     optimizer = PCGrad(optimizer)
     # Run for the specified number of epochs.
+
+
     para_data_subsets = random_split(para_train_data, [1/17] * 17)
     sts_data_subsets = random_split(sts_train_data, [1/17] * 17)
     best_dev_score = 0
+    
     for epoch in range(args.epochs):
-        model.train()
-
-        para_train_dataloader = DataLoader(para_data_subsets[epoch % len(para_data_subsets)],
-                                           shuffle=True, batch_size=args.batch_size,
-                                           collate_fn=para_train_data.collate_fn)
-
-        sts_train_dataloader = DataLoader(sts_data_subsets[epoch % len(sts_data_subsets)],
-                                           shuffle=True, batch_size=args.batch_size,
-                                           collate_fn=sts_train_data.collate_fn)
 
         polar_loss = 0
         if args.use_cfimdb:
             polar_loss = train_polar_sentiment(model, epoch, args.batch_size, optimizer, device, cfimdb_train_dataloader, args.use_smart)
-        sst_loss = train_sentiment(model, epoch, args.batch_size, optimizer, device, sst_train_dataloader, args.use_smart)
-        para_loss = train_paraphrase(model, epoch, args.batch_size, optimizer, device, para_train_dataloader, args.use_smart)
-        sts_loss = train_similarity(model, epoch, args.batch_size, optimizer, device, sts_train_dataloader, args.use_smart)
+        #sst_loss = train_sentiment(model, epoch, args.batch_size, optimizer, device, sst_train_dataloader, args.use_smart)
+        #para_loss = train_paraphrase(model, epoch, args.batch_size, optimizer, device, para_train_dataloader, args.use_smart)
+        #sts_loss = train_similarity(model, epoch, args.batch_size, optimizer, device, sts_train_dataloader, args.use_smart)
+        
+        length_sst = len(sst_train_dataloader)
+        length_para = len(para_train_dataloader)
+        length_sts = len(sts_train_dataloader)
 
+        len_max = max(length_sst, length_para, length_sts)
+
+        sst_loss = 0
+        para_loss = 0
+        sts_loss = 0
+
+        for i in range(len_max):
+
+            optimizer.zero_grad()
+            
+            
+            if len(sst_train_dataloader) > 0:
+                sst_batch = next(enumerate(sst_train_dataloader))
+
+                b_sst_ids, b_sst_mask, b_sst_labels, b_sst_sent_ids = (sst_batch[1]['token_ids'],
+                                            sst_batch[1]['attention_mask'], sst_batch[1]['labels'], sst_batch[1]['sent_ids'])
+                
+                b_sst_ids = b_sst_ids.to(device)
+                b_sst_mask = b_sst_mask.to(device)
+                b_sst_labels = b_sst_labels.to(device)
+
+                optimizer.zero_grad()
+                # if use_smart == False, logits == logits_perturbed
+                sst_logits, sst_logits_perturbed = model.predict_sentiment(b_sst_ids, b_sst_mask, b_sst_sent_ids, perturb=args.use_smart)
+
+                sst_original_loss = F.cross_entropy(sst_logits, b_sst_labels.view(-1), reduction='sum') / args.batch_size
+                sst_smart_reg = ((sst_logits - sst_logits_perturbed) ** 2).mean()
+                sst_final_loss = sst_original_loss + 0.1 * sst_smart_reg # reg coeff 0.1 is a hyperparameter
+
+                sst_loss += sst_final_loss
+
+            if len(para_train_dataloader) > 0:
+                para_batch = next(enumerate(para_train_dataloader))
+                b_para_ids, b_para_mask, b_para_labels, b_para_sent_ids = (para_batch[1]['token_ids'],
+                                                    para_batch[1]['attention_mask'], para_batch[1]['labels'], para_batch[1]['sent_ids'])
+
+                b_para_ids = b_para_ids.to(device)
+                b_para_mask = b_para_mask.to(device)
+                b_para_labels = b_para_labels.to(device)
+
+                para_prediction = model.predict_paraphrase(b_para_ids, b_para_mask, b_para_sent_ids, perturb=args.use_smart)
+
+                # if use_smart == False, logits == logits_perturbed
+                para_logits, para_logits_perturbed = para_prediction[0].sigmoid().flatten(), para_prediction[1].sigmoid().flatten()
+                para_original_loss = F.binary_cross_entropy(para_logits, b_para_labels.view(-1).float(), reduction='sum') / args.batch_size
+                para_smart_reg = ((para_logits - para_logits_perturbed) ** 2).mean()
+                para_final_loss = para_original_loss + 0.1 * para_smart_reg # reg coeff 0.1 is a hyperparameter
+
+                para_loss += para_final_loss
+
+
+            if len(sts_train_dataloader) > 0:
+                sts_batch = next(enumerate(sts_train_dataloader))
+
+                b_sts_ids, b_sts_mask, b_sts_labels, b_sts_sent_ids = (sts_batch[1]['token_ids'],
+                                                    sts_batch[1]['attention_mask'], sts_batch[1]['labels'], sts_batch[1]['sent_ids'])
+
+                b_sts_ids = b_sts_ids.to(device)
+                b_sts_mask = b_sts_mask.to(device)
+                b_sts_labels = b_sts_labels.to(device)
+
+                sts_prediction = model.predict_similarity(b_sts_ids, b_sts_mask, b_sts_sent_ids, perturb=args.use_smart)
+                # if use_smart == False, logits == logits_perturbed
+                sts_logits, sts_logits_perturbed = sts_prediction[0].flatten(), sts_prediction[1].flatten()
+                sts_original_loss = F.mse_loss(sts_logits, b_sts_labels.view(-1).float(), reduction='sum') / args.batch_size
+
+                sts_smart_reg = ((sts_logits - sts_logits_perturbed) ** 2).mean()
+                sts_final_loss = sts_original_loss + 0.1 * sts_smart_reg # reg coeff 0.1 is a hyperparameter
+
+                sts_loss += sts_final_loss
+            
+            sst_loss_norm = sst_loss /  (args.batch_size * length_sst)
+            para_loss_norm = para_loss / (args.batch_size * length_para)
+            sts_loss_norm = sts_loss / (args.batch_size * length_sts)
+
+            optimizer.pc_backward([sst_final_loss, para_final_loss, sts_final_loss])
+            optimizer.step()
+
+        # at the end of the epoch, calculate results
         sst_train_acc, _, _, para_train_acc, _, _, sts_train_corr, *_ = model_eval_multitask(sst_train_dataloader,
                                                                                              para_train_dataloader,
                                                                                              sts_train_dataloader,
@@ -329,9 +406,9 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(
-            f"Epoch {epoch}: sentiment loss :: {sst_loss :.3f},\n"
-            f" paraphrase loss :: {para_loss :.3f},\n"
-            f" similarity loss :: {sts_loss :.3f},\n"
+            f"Epoch {epoch}: sentiment loss :: {sst_loss_norm :.3f},\n"
+            f" paraphrase loss :: {para_loss_norm :.3f},\n"
+            f" similarity loss :: {sts_loss_norm :.3f},\n"
             f" polar similarity loss :: {polar_loss :.3f},\n"
             f" sentiment train acc :: {sst_train_acc :.3f},\n"
             f" paraphrase train acc :: {para_train_acc :.3f},\n"
@@ -571,7 +648,7 @@ def get_args():
     parser.add_argument("--cfimdb_test", type=str, default="data/ids-cfimdb-test-student.csv")
 
     parser.add_argument("--seed", type=int, default=11711)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--use_smart", type=bool, default=False)
 
     parser.add_argument("--option", type=str,

@@ -7,6 +7,9 @@ import numpy as np
 import copy
 import random
 
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:30512"
+torch.cuda.empty_cache() 
 
 
 class PCGrad(torch.optim.Adam):
